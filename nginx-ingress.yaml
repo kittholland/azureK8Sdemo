@@ -7,7 +7,7 @@ spec:
   - host: k8s-demo-lb-pub.westus2.cloudapp.azure.com
     http:
       paths:
-      - path: /
+      - path: /dashboard
         backend:
           serviceName: kubernetes-dashboard
           servicePort: 80

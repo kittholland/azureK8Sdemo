@@ -2,6 +2,7 @@ apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
   name: dashboard-ingress
+  namespace: kube-system
 spec:
   rules:
   - host: k8s-demo-lb-pub.westus2.cloudapp.azure.com

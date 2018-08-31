@@ -2,7 +2,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$vmCreds = Get-Credential -Message 'Password will not be used'
+$vmCreds = Get-Credential -Message 'Username for VM login, Password for SSH private key'
 $username = $vmCreds.UserName
 $autoShutdownTime = '1900'
 $timeZone = Get-TimeZone
@@ -62,14 +62,14 @@ $ruleSplat = @{
 }
 $sshRule = New-AzureRmNetworkSecurityRuleConfig @ruleSplat
 
-$ruleSplat.Name = 'inbound-http'
+$ruleSplat.Name = 'ingress-http'
 $ruleSplat.Priority = '1080'
-$ruleSplat.DestinationPortRange = 80
+$ruleSplat.DestinationPortRange = 30080
 $httpRule = New-AzureRmNetworkSecurityRuleConfig @ruleSplat
 
-$ruleSplat.Name = 'inbound-https'
+$ruleSplat.Name = 'ingress-https'
 $ruleSplat.Priority = '1443'
-$ruleSplat.DestinationPortRange = 443
+$ruleSplat.DestinationPortRange = 30443
 $httpsRule = New-AzureRmNetworkSecurityRuleConfig @ruleSplat
 
 $nsg = New-AzureRmNetworkSecurityGroup -Name "$resourceGroupName-nsg" -ResourceGroupName $resourceGroupName -Location $location -SecurityRules $sshRule, $httpRule, $httpsRule

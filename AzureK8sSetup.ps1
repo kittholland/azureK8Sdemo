@@ -1,4 +1,18 @@
 ﻿#requires -Modules Posh-SSH, AzureRM
+Param
+(
+  [Parameter(Mandatory)]
+  [String]$DNSName,
+
+  [Parameter()]
+  [String]$SSHPublicKeyPath = "$HOME\.ssh\id_rsa.pub",
+
+  [Parameter()]
+  [String]$SSHPrivateKeyPath = "$HOME\.ssh\id_rsa",
+
+  [Parameter()]
+  [Switch]$AutoShutdown
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -8,7 +22,6 @@ $autoShutdownTime = '1900'
 $timeZone = Get-TimeZone
 
 $resourceGroupName = 'k8s'
-$dnsName = "$resourceGroupName-demo-lb-pub"
 $location = 'West US 2'
 $VMNames = 'master', 'slave'
 $VMSize = 'Standard_D2s_v3' # 2 core, 8gb
@@ -16,8 +29,7 @@ $subnetName = "$resourceGroupName-subnet"
 $subnetRange = '10.0.2.0/24'
 $netRange = '10.0.0.0/16'
 
-$sshPublicKey = Get-Content -Raw -Path "$env:USERPROFILE\documents\azurekeypublic"
-$sshPrivateKeyPath = "$env:USERPROFILE\documents\azurekeyopenssh"
+$sshPublicKey = Get-Content -Raw -Path $SSHPublicKeyPath
 
 $outboundIpObj = Invoke-RestMethod -Uri http://ipinfo.io/json
 $outboundCidr = "$($outboundIpObj.ip)/32"
@@ -131,6 +143,23 @@ $lbSplat = @{
 
 $null = New-AzureRmLoadBalancer @lbSplat
 
+If($AutoShutdown)
+{
+  $registrationState = {
+      Get-AzureRmResourceProvider -ProviderNamespace Microsoft.DevTestLab |
+          Select-Object -ExpandProperty RegistrationState -Unique
+  }
+
+  $registrationStatus = & $registrationState
+  
+  while ('Registered' -ne $registrationStatus)
+  {
+      $null = Register-AzureRmResourceProvider -ProviderNamespace Microsoft.DevTestLab
+      Start-Sleep -Seconds 30
+      $registrationStatus = & $registrationState
+  }
+}
+
 Foreach($vmName in $VMNames)
 {
   $computerName = "$resourceGroupName-$vmName"
@@ -187,30 +216,33 @@ Foreach($vmName in $VMNames)
   $null = Set-AzureRmVMBootDiagnostics -VM $vmConfig -Disable
   
   $null = New-AzureRmVM -ResourceGroupName $resourceGroupName -Location $location -VM $vmConfig
-    
-  $autoShutdownProperties = @{
-    status               = 'Enabled'
-    taskType             = 'ComputeVmShutdownTask'
-    dailyRecurrence      = @{
-      'time' = $autoShutdownTime
+  
+  If($AutoShutdown)
+  {
+    $autoShutdownProperties = @{
+      status               = 'Enabled'
+      taskType             = 'ComputeVmShutdownTask'
+      dailyRecurrence      = @{
+        'time' = $autoShutdownTime
+      }
+      timeZoneId           = $timeZone.id
+      notificationSettings = @{
+        status        = 'Disabled'
+        timeInMinutes = 30
+      }
+      targetResourceId     = (Get-AzureRmVM -ResourceGroupName $resourceGroupName -Name $computerName).Id
     }
-    timeZoneId           = $timeZone.id
-    notificationSettings = @{
-      status        = 'Disabled'
-      timeInMinutes = 30
+
+    $autoShutdownSplat = @{
+      ResourceId = '/subscriptions/{0}/resourceGroups/{1}/providers/microsoft.devtestlab/schedules/shutdown-computevm-{2}' -f $subscriptionId, $resourceGroupName, $computerName
+      Location   = $location
+      Properties = $autoShutdownProperties
+      Force      = $true
     }
-    targetResourceId     = (Get-AzureRmVM -ResourceGroupName $resourceGroupName -Name $computerName).Id
-  }
 
-  $autoShutdownSplat = @{
-    ResourceId = '/subscriptions/{0}/resourceGroups/{1}/providers/microsoft.devtestlab/schedules/shutdown-computevm-{2}' -f $subscriptionId, $resourceGroupName, $computerName
-    Location   = $location
-    Properties = $autoShutdownProperties
-    Force      = $true
+    $null = New-AzureRmResource @autoShutdownSplat
   }
-
-  $null = New-AzureRmResource @autoShutdownSplat
-    
+  
   $publicIpObj = Get-AzureRmPublicIpAddress -Name $publicIpName -ResourceGroupName $resourceGroupName
   $publicIp = $publicIpObj.IpAddress
   Write-Host -Object "Public IP for $computerName`: $publicIp"
@@ -267,7 +299,7 @@ Foreach($vmName in $VMNames)
 Write-Verbose -Message "Installing Nginx Ingress"
 $null = Invoke-SSHCommand -SSHSession $masterSshSession -Command 'kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/master/deploy/mandatory.yaml'
 $null = Invoke-SSHCommand -SSHSession $masterSshSession -Command 'kubectl apply -f https://raw.githubusercontent.com/kittholland/azureK8Sdemo/master/nginx-service-nodeport.yaml'
-$null = Invoke-SSHCommand -SSHSession $masterSshSession -Command 'kubectl apply -f https://raw.githubusercontent.com/kittholland/azureK8Sdemo/master/nginx-ingress.yaml'
+$null = Invoke-SSHCommand -SSHSession $masterSshSession -Command "curl -s https://raw.githubusercontent.com/kittholland/azureK8Sdemo/master/nginx-ingress.yaml | sed s/k8s-demo-lb-pub.westus2.cloudapp.azure.com/$($lbPublicIpObj.DnsSettings.Fqdn)/g | kubectl apply -f -"
 
 Write-Verbose -Message "Installing Kubernetes Dashboard"
 $null = Invoke-SSHCommand -SSHSession $masterSshSession -Command 'kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/master/src/deploy/alternative/kubernetes-dashboard.yaml'
@@ -276,6 +308,7 @@ $null = Invoke-SSHCommand -SSHSession $masterSshSession -Command 'kubectl apply 
 $publicIpObj = Get-AzureRmPublicIpAddress -Name $lbPublicIpObj.Name -ResourceGroupName $resourceGroupName
 $publicIp = $publicIpObj.IpAddress
 Write-Host -Object "Public IP for Load Balancer`: $($publicIpObj.IpAddress)"
+Write-Host -Object "Public DNS Name: $($publicIpObj.DnsSettings.Fqdn)"
 
 
 #Run the line below to destroy the resource group you created. This will remove everything including other items you have added to that resource group.

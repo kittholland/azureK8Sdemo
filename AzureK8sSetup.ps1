@@ -16,11 +16,6 @@ Param
 
 $ErrorActionPreference = 'Stop'
 
-$vmCreds = Get-Credential -Message 'Username for VM login, Password for SSH private key'
-$username = $vmCreds.UserName
-$autoShutdownTime = '1900'
-$timeZone = Get-TimeZone
-
 $resourceGroupName = 'k8s'
 $location = 'West US 2'
 $VMNames = 'master', 'slave'
@@ -28,8 +23,33 @@ $VMSize = 'Standard_D2s_v3' # 2 core, 8gb
 $subnetName = "$resourceGroupName-subnet"
 $subnetRange = '10.0.2.0/24'
 $netRange = '10.0.0.0/16'
+$autoShutdownTime = '1900'
+
+Try 
+{
+  $null = Resolve-DnsName -Name "$DNSName.$($location -replace ' ').cloudapp.azure.com"
+}
+Catch
+{
+  If($PSItem.Exception.Message.EndsWith('DNS name does not exist'))
+  {
+    $nameAvailable = $true
+  }
+  Else
+  {
+    Throw $PSItem
+  }
+}
+If(!$nameAvailable)
+{
+  Throw "DNS Name $DNSName is unavailable, please select another name."
+}
 
 $sshPublicKey = Get-Content -Raw -Path $SSHPublicKeyPath
+
+$vmCreds = Get-Credential -Message 'Username for VM login, Password for SSH private key'
+$username = $vmCreds.UserName
+$timeZone = Get-TimeZone
 
 $outboundIpObj = Invoke-RestMethod -Uri http://ipinfo.io/json
 $outboundCidr = "$($outboundIpObj.ip)/32"
